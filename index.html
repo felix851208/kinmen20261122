@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+  <title>電子節目單</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #071126;
+      background-image: radial-gradient(circle at 50% 45%, #0f234d 0%, #071126 75%);
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* 3D 書本舞台 */
+    .flipbook-stage {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      perspective: 2600px;
+    }
+
+    /* 實體書冊陰影與 3D 容器 */
+    .book-shell {
+      position: relative;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      transform-style: preserve-3d;
+      box-shadow:
+        0 28px 65px rgba(0, 0, 0, 0.78),
+        0 10px 25px rgba(0, 0, 0, 0.6);
+      background-color: #0b1938;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    /* 單頁槽位 */
+    .page-slot {
+      position: relative;
+      height: 100%;
+      background-color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .page-slot.blank-slot {
+      background-color: #091530;
+    }
+
+    .page-slot canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+    }
+
+    /* 雙頁中央書脊自然光影 */
+    .spine-left::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(
+        to right,
+        rgba(0, 0, 0, 0) 86%,
+        rgba(0, 0, 0, 0.14) 96%,
+        rgba(0, 0, 0, 0.34) 100%
+      );
+    }
+
+    .spine-right::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(
+        to left,
+        rgba(0, 0, 0, 0) 86%,
+        rgba(0, 0, 0, 0.12) 96%,
+        rgba(0, 0, 0, 0.28) 100%
+      );
+    }
+
+    /* 3D 翻頁動態葉片 */
+    .turning-leaf {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      z-index: 30;
+      transform-style: preserve-3d;
+      pointer-events: none;
+      background: #ffffff;
+      overflow: hidden;
+    }
+
+    .turning-leaf canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .turning-leaf::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    /* 桌機雙頁：往右翻（下一頁） */
+    @keyframes turnNextDual {
+      0% {
+        transform: rotateY(0deg);
+        box-shadow: -6px 0 20px rgba(0, 0, 0, 0.25);
+      }
+      50% {
+        transform: rotateY(-90deg);
+        box-shadow: -24px 0 48px rgba(0, 0, 0, 0.65);
+      }
+      100% {
+        transform: rotateY(-180deg);
+        box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+      }
+    }
+
+    /* 桌機雙頁：往左翻（上一頁） */
+    @keyframes turnPrevDual {
+      0% {
+        transform: rotateY(0deg);
+        box-shadow: 6px 0 20px rgba(0, 0, 0, 0.25);
+      }
+      50% {
+        transform: rotateY(90deg);
+        box-shadow: 24px 0 48px rgba(0, 0, 0, 0.65);
+      }
+      100% {
+        transform: rotateY(180deg);
+        box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+      }
+    }
+
+    /* 手機單頁：往下一頁翻 */
+    @keyframes turnNextSingle {
+      0% {
+        transform: rotateY(0deg);
+        opacity: 1;
+        box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+      }
+      60% {
+        transform: rotateY(-85deg);
+        opacity: 0.85;
+        box-shadow: -20px 0 40px rgba(0, 0, 0, 0.6);
+      }
+      100% {
+        transform: rotateY(-150deg);
+        opacity: 0;
+      }
+    }
+
+    /* 手機單頁：回上一頁翻 */
+    @keyframes turnPrevSingle {
+      0% {
+        transform: rotateY(-120deg);
+        opacity: 0.15;
+        box-shadow: -20px 0 40px rgba(0, 0, 0, 0.6);
+      }
+      100% {
+        transform: rotateY(0deg);
+        opacity: 1;
+        box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+      }
+    }
+
+    .anim-next-dual {
+      right: 0;
+      width: 50%;
+      transform-origin: left center;
+      animation: turnNextDual 0.58s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+    }
+
+    .anim-next-dual::after {
+      background: linear-gradient(to right, rgba(0, 0, 0, 0.28) 0%, rgba(255, 255, 255, 0.12) 25%, rgba(0, 0, 0, 0.15) 100%);
+    }
+
+    .anim-prev-dual {
+      left: 0;
+      width: 50%;
+      transform-origin: right center;
+      animation: turnPrevDual 0.58s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+    }
+
+    .anim-prev-dual::after {
+      background: linear-gradient(to left, rgba(0, 0, 0, 0.28) 0%, rgba(255, 255, 255, 0.12) 25%, rgba(0, 0, 0, 0.15) 100%);
+    }
+
+    .anim-next-single {
+      inset: 0;
+      width: 100%;
+      transform-origin: left center;
+      animation: turnNextSingle 0.48s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+    }
+
+    .anim-prev-single {
+      inset: 0;
+      width: 100%;
+      transform-origin: left center;
+      animation: turnPrevSingle 0.48s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+    }
+
+    /* 載入轉圈動畫 */
+    @keyframes spinGold {
+      to { transform: rotate(360deg); }
+    }
+    .loader-ring {
+      width: 34px;
+      height: 34px;
+      border: 2.5px solid rgba(255, 212, 82, 0.22);
+      border-top-color: #FFD452;
+      border-radius: 50%;
+      animation: spinGold 0.85s linear infinite;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 全螢幕極簡舞台 -->
+  <main id="stage" class="flipbook-stage">
+
+    <!-- 極簡金色載入轉圈（PDF 渲染完成後自動隱藏） -->
+    <div id="loaderRing" class="loader-ring"></div>
+
+    <!-- 若本機預覽或找不到 program.pdf 時的極簡備用觸發區（平時隱藏） -->
+    <div id="fallbackTrigger" class="hidden cursor-pointer text-center p-8 rounded-xl border border-yellow-400/40 bg-blue-950/60 text-yellow-300/90 text-sm tracking-widest">
+      點擊此處或拖曳節目單 PDF 開啟
+      <input type="file" id="pdfInput" accept="application/pdf" class="hidden" />
+    </div>
+
+    <!-- 3D 翻頁書本容器（初始隱藏，載入 PDF 後顯示） -->
+    <div id="bookShell" class="book-shell hidden">
+      <div id="pagesContainer" class="w-full h-full flex"></div>
+      <div id="turningLeaf" class="turning-leaf hidden"></div>
+    </div>
+
+  </main>
+
+  <script>
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+
+    // Google 雲端硬碟節目單檔案 ID 與多重讀取來源（支援直接載入大檔案）
+    const DRIVE_FILE_ID = '1l3M55OkmRAEmwZlph1g0gOiBQPzhT9mR';
+    const DRIVE_DIRECT_URL = `https://drive.google.com/uc?export=download&id=${DRIVE_FILE_ID}`;
+    const PDF_SOURCES = [
+      `https://corsproxy.io/?${encodeURIComponent(DRIVE_DIRECT_URL)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(DRIVE_DIRECT_URL)}`,
+      DRIVE_DIRECT_URL,
+      './program.pdf'
+    ];
+
+    const stage = document.getElementById('stage');
+    const loaderRing = document.getElementById('loaderRing');
+    const fallbackTrigger = document.getElementById('fallbackTrigger');
+    const pdfInput = document.getElementById('pdfInput');
+    const bookShell = document.getElementById('bookShell');
+    const pagesContainer = document.getElementById('pagesContainer');
+    const turningLeaf = document.getElementById('turningLeaf');
+
+    let pdfDoc = null;
+    let totalPages = 0;
+    let currentPage = 1;
+    let renderedCache = new Map();
+    let pageAspectRatio = 0.707;
+    let isDualMode = window.innerWidth > 768;
+    let isAnimating = false;
+
+    // 網頁開啟後自動從 Google 雲端硬碟載入並解析節目單 PDF
+    async function initPdfBook() {
+      if (!window.pdfjsLib) return;
+
+      for (const sourceUrl of PDF_SOURCES) {
+        try {
+          const loadingTask = window.pdfjsLib.getDocument({
+            url: sourceUrl,
+            cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+            cMapPacked: true
+          });
+          pdfDoc = await loadingTask.promise;
+          await setupLoadedPdf();
+          return;
+        } catch (err) {
+          // 若單一節點受阻，自動嘗試下一個備援讀取路徑
+        }
+      }
+
+      // 若雲端權限未設為公開或所有路徑均受阻，顯示極簡點擊選檔備援
+      loaderRing.classList.add('hidden');
+      fallbackTrigger.classList.remove('hidden');
+    }
+
+    async function setupLoadedPdf() {
+      totalPages = pdfDoc.numPages;
+      currentPage = 1;
+      renderedCache.clear();
+
+      // 取得第 1 頁原生寬高比例
+      const firstPage = await pdfDoc.getPage(1);
+      const vp = firstPage.getViewport({ scale: 1 });
+      pageAspectRatio = vp.width / vp.height;
+
+      // 預先渲染封面與前幾頁高解析畫面
+      await getRenderedPageCanvas(1);
+      if (totalPages >= 2) getRenderedPageCanvas(2);
+      if (totalPages >= 3) getRenderedPageCanvas(3);
+
+      // 隱藏載入轉圈與備用區，立即顯示翻頁書本
+      loaderRing.classList.add('hidden');
+      fallbackTrigger.classList.add('hidden');
+      bookShell.classList.remove('hidden');
+
+      updateBookDimensions();
+      await renderCurrentSpread();
+    }
+
+    // 備用本機選檔／拖曳載入
+    fallbackTrigger.addEventListener('click', () => pdfInput.click());
+    pdfInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      fallbackTrigger.classList.add('hidden');
+      loaderRing.classList.remove('hidden');
+      const buffer = await file.arrayBuffer();
+      pdfDoc = await window.pdfjsLib.getDocument({ data: buffer }).promise;
+      await setupLoadedPdf();
+    });
+
+    stage.addEventListener('dragover', (e) => e.preventDefault());
+    stage.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer?.files?.[0];
+      if (!file || file.type !== 'application/pdf') return;
+      fallbackTrigger.classList.add('hidden');
+      loaderRing.classList.remove('hidden');
+      const buffer = await file.arrayBuffer();
+      pdfDoc = await window.pdfjsLib.getDocument({ data: buffer }).promise;
+      await setupLoadedPdf();
+    });
+
+    // 高 DPI 渲染指定頁碼並快取（保留原檔一字不改的畫面）
+    async function getRenderedPageCanvas(pageNum) {
+      if (renderedCache.has(pageNum)) {
+        return renderedCache.get(pageNum);
+      }
+
+      const page = await pdfDoc.getPage(pageNum);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+      const targetHeight = Math.max(window.innerHeight * dpr * 1.15, 1100);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = targetHeight / baseViewport.height;
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+
+      const ctx = canvas.getContext('2d', { alpha: false });
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      await page.render({
+        canvasContext: ctx,
+        viewport: viewport
+      }).promise;
+
+      renderedCache.set(pageNum, canvas);
+      return canvas;
+    }
+
+    // 將快取的高解析 Canvas 複製到顯示槽位
+    function cloneCanvas(sourceCanvas) {
+      const copy = document.createElement('canvas');
+      copy.width = sourceCanvas.width;
+      copy.height = sourceCanvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(sourceCanvas, 0, 0);
+      return copy;
+    }
+
+    // 計算書冊在目前螢幕下的最佳對開或單頁尺寸
+    function updateBookDimensions() {
+      isDualMode = window.innerWidth > 768;
+      const padding = isDualMode ? 32 : 16;
+      const maxWidth = window.innerWidth - padding;
+      const maxHeight = window.innerHeight - padding;
+
+      const bookAspect = isDualMode ? pageAspectRatio * 2 : pageAspectRatio;
+      let width = maxWidth;
+      let height = width / bookAspect;
+
+      if (height > maxHeight) {
+        height = maxHeight;
+        width = height * bookAspect;
+      }
+
+      bookShell.style.width = `${Math.floor(width)}px`;
+      bookShell.style.height = `${Math.floor(height)}px`;
+    }
+
+    // 取得目前頁碼對應的左頁與右頁編號（雙頁模式：封面在右，內頁兩兩對開）
+    function getSpreadPages(page) {
+      if (!isDualMode) {
+        return [page];
+      }
+      if (page <= 1) {
+        return [null, 1];
+      }
+      const left = page % 2 === 0 ? page : page - 1;
+      const right = left + 1 <= totalPages ? left + 1 : null;
+      return [left, right];
+    }
+
+    // 渲染目前畫面上的書頁
+    async function renderCurrentSpread() {
+      if (!pdfDoc) return;
+      const spread = getSpreadPages(currentPage);
+      pagesContainer.innerHTML = '';
+
+      for (let i = 0; i < spread.length; i++) {
+        const pNum = spread[i];
+        const slot = document.createElement('div');
+        slot.className = isDualMode
+          ? `page-slot w-1/2 ${i === 0 ? 'spine-left' : 'spine-right'}`
+          : 'page-slot w-full';
+
+        if (pNum === null) {
+          slot.classList.add('blank-slot');
+        } else {
+          const srcCanvas = await getRenderedPageCanvas(pNum);
+          slot.appendChild(cloneCanvas(srcCanvas));
+        }
+
+        pagesContainer.appendChild(slot);
+      }
+
+      // 背景預載相鄰頁面，確保翻頁滑順不閃爍
+      preloadAdjacentPages();
+    }
+
+    function preloadAdjacentPages() {
+      const targets = [
+        currentPage - 2,
+        currentPage - 1,
+        currentPage + 1,
+        currentPage + 2,
+        currentPage + 3
+      ];
+      targets.forEach((p) => {
+        if (p >= 1 && p <= totalPages && !renderedCache.has(p)) {
+          getRenderedPageCanvas(p).catch(() => {});
+        }
+      });
+    }
+
+    // 往下一頁翻
+    async function turnNext() {
+      if (!pdfDoc || isAnimating) return;
+
+      let nextTarget = currentPage;
+      let flippingPageNum = currentPage;
+
+      if (isDualMode) {
+        if (currentPage === 1 && totalPages > 1) {
+          nextTarget = 2;
+          flippingPageNum = 1;
+        } else {
+          const [left, right] = getSpreadPages(currentPage);
+          if (!right || right >= totalPages) return;
+          nextTarget = right + 1;
+          flippingPageNum = right;
+        }
+      } else {
+        if (currentPage >= totalPages) return;
+        nextTarget = currentPage + 1;
+        flippingPageNum = currentPage;
+      }
+
+      isAnimating = true;
+      const animDuration = isDualMode ? 580 : 480;
+
+      try {
+        const leafCanvas = await getRenderedPageCanvas(flippingPageNum);
+        turningLeaf.innerHTML = '';
+        turningLeaf.appendChild(cloneCanvas(leafCanvas));
+        turningLeaf.className = `turning-leaf ${isDualMode ? 'anim-next-dual' : 'anim-next-single'}`;
+
+        currentPage = nextTarget;
+        await renderCurrentSpread();
+
+        setTimeout(() => {
+          turningLeaf.className = 'turning-leaf hidden';
+          turningLeaf.innerHTML = '';
+          isAnimating = false;
+        }, animDuration);
+      } catch (err) {
+        isAnimating = false;
+      }
+    }
+
+    // 往上一頁翻
+    async function turnPrev() {
+      if (!pdfDoc || isAnimating) return;
+
+      let prevTarget = currentPage;
+      let flippingPageNum = currentPage;
+
+      if (isDualMode) {
+        const [left] = getSpreadPages(currentPage);
+        if (!left || left <= 1) return;
+        flippingPageNum = left;
+        prevTarget = left === 2 ? 1 : left - 2;
+      } else {
+        if (currentPage <= 1) return;
+        prevTarget = currentPage - 1;
+        flippingPageNum = prevTarget;
+      }
+
+      isAnimating = true;
+      const animDuration = isDualMode ? 580 : 480;
+
+      try {
+        const leafCanvas = await getRenderedPageCanvas(flippingPageNum);
+        turningLeaf.innerHTML = '';
+        turningLeaf.appendChild(cloneCanvas(leafCanvas));
+        turningLeaf.className = `turning-leaf ${isDualMode ? 'anim-prev-dual' : 'anim-prev-single'}`;
+
+        currentPage = prevTarget;
+        await renderCurrentSpread();
+
+        setTimeout(() => {
+          turningLeaf.className = 'turning-leaf hidden';
+          turningLeaf.innerHTML = '';
+          isAnimating = false;
+        }, animDuration);
+      } catch (err) {
+        isAnimating = false;
+      }
+    }
+
+    // 點擊書本右半邊翻下一頁、左半邊翻上一頁
+    bookShell.addEventListener('click', (e) => {
+      const rect = bookShell.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      if (clickX >= rect.width / 2) {
+        turnNext();
+      } else {
+        turnPrev();
+      }
+    });
+
+    // 手機與觸控板左右滑動手勢翻頁
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    stage.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+      }
+    }, { passive: true });
+
+    stage.addEventListener('touchend', (e) => {
+      if (e.changedTouches.length !== 1) return;
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = e.changedTouches[0].clientY - touchStartY;
+
+      if (Math.abs(dx) > 42 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        if (dx < 0) {
+          turnNext();
+        } else {
+          turnPrev();
+        }
+      }
+    }, { passive: true });
+
+    // 鍵盤左右方向鍵翻頁
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+        e.preventDefault();
+        turnNext();
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        turnPrev();
+      }
+    });
+
+    // 視窗縮放或螢幕旋轉時自動調整書本比例與單／雙頁模式
+    window.addEventListener('resize', () => {
+      if (!pdfDoc) return;
+      const prevDual = isDualMode;
+      updateBookDimensions();
+      if (prevDual !== isDualMode) {
+        renderCurrentSpread();
+      }
+    });
+
+    // 啟動自動載入節目單
+    window.addEventListener('DOMContentLoaded', () => {
+      initPdfBook();
+    });
+  </script>
+</body>
+</html>
